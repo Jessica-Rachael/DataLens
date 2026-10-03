@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataLens: automated exploratory data analysis</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='14' cy='14' r='9' fill='none' stroke='%231F6E8C' stroke-width='4'/><path d='M21 21l7 7' stroke='%2317303C' stroke-width='4' stroke-linecap='round'/></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body data-max-mb="{{ max_mb }}">
+
+<header class="topbar">
+  <a class="brand" href="/" aria-label="DataLens home">
+    <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><circle cx="14" cy="14" r="9" fill="none" stroke="currentColor" stroke-width="3.5"/><path d="M21 21l7 7" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/><path d="M9.5 16.5l3-4 2.5 2.5 3.5-5" fill="none" stroke="#1F6E8C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>DataLens</span>
+  </a>
+  <div class="topbar-actions" id="report-actions" hidden>
+    <span class="file-chip" id="file-chip"></span>
+    <button type="button" class="btn" id="btn-download">Download cleaned CSV</button>
+    <button type="button" class="btn" id="btn-print">Save report as PDF</button>
+    <button type="button" class="btn btn-primary" id="btn-new">Analyze another file</button>
+  </div>
+</header>
+
+<div class="banner" id="plotly-missing" hidden>
+  Charts can't load because Plotly isn't installed. In the VS Code terminal run <code>pip install -r requirements.txt</code>, then restart the app.
+</div>
+
+<!-- ============ LANDING / UPLOAD ============ -->
+<main class="landing" id="landing">
+  <section class="intro">
+    <h1>Drop in a CSV and see what's inside it.</h1>
+    <p class="lede">DataLens profiles your file, checks its quality, runs the standard exploratory analyses and draws the charts that fit each column. No code needed.</p>
+    <ul class="checks">
+      <li><strong>Column types</strong> detected automatically: numbers, categories, dates, IDs and free text.</li>
+      <li><strong>Data quality</strong>: missing values, duplicates, invalid entries and inconsistent spellings.</li>
+      <li><strong>Statistics</strong>: mean, median, mode, spread, quartiles, skewness and kurtosis.</li>
+      <li><strong>Relationships</strong>: correlation heatmap, scatter plots, pivot tables and cross-tabs.</li>
+      <li><strong>Time series</strong>: trends, moving averages, seasonal patterns and unusual periods.</li>
+      <li><strong>Outliers</strong> by the IQR and Z-score methods, with box plots.</li>
+    </ul>
+  </section>
+
+  <section class="upload-area" aria-label="Upload a dataset">
+    <label class="lens" id="dropzone" tabindex="0">
+      <input type="file" id="file-input" accept=".csv,.tsv,.txt,text/csv,text/plain">
+      <span class="lens-glass" aria-hidden="true"></span>
+      <span class="lens-text">
+        <span class="lens-title">Drop a CSV file here</span>
+        <span class="lens-sub">or click to choose one <span>(up to {{ max_mb }} MB)</span></span>
+      </span>
+    </label>
+
+    <div class="upload-status" id="upload-status" hidden>
+      <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+      <p id="upload-message" role="status" aria-live="polite"></p>
+    </div>
+    <p class="upload-error" id="upload-error" role="alert" hidden></p>
+
+    {% if samples %}
+    <div class="samples">
+      <p>No file handy? Try a sample dataset:</p>
+      <div class="sample-buttons">
+        {% for s in samples %}
+        <button type="button" class="btn btn-quiet" data-sample="{{ s }}">{{ s }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    <p class="fine-print">Your file is analysed on this computer by the local Python server and kept in memory only while the app runs.</p>
+  </section>
+</main>
+
+<!-- ============ REPORT ============ -->
+<div class="report" id="report" hidden>
+  <nav class="sidenav" aria-label="Report sections">
+    <a href="#sec-overview">Overview</a>
+    <a href="#sec-insights">Key findings</a>
+    <a href="#sec-quality">Data quality</a>
+    <a href="#sec-columns">Column profiles</a>
+    <a href="#sec-stats">Summary statistics</a>
+    <a href="#sec-distributions">Distributions</a>
+    <a href="#sec-categories">Categories</a>
+    <a href="#sec-correlation">Correlation</a>
+    <a href="#sec-multivariate">Multivariate analysis</a>
+    <a href="#sec-crosstab">Cross-tabulation</a>
+    <a href="#sec-timeseries">Time series</a>
+    <a href="#sec-outliers">Outliers</a>
+    <a href="#sec-compare">Compare datasets</a>
+  </nav>
+
+  <div class="report-body">
+    <section id="sec-overview" class="section">
+      <h2 id="report-title">Overview</h2>
+      <div class="kpis" id="kpis"></div>
+      <div id="load-notes"></div>
+      <h3>First 50 rows</h3>
+      <p class="hint">Values as DataLens read them. Grey cells are missing values.</p>
+      <div id="preview"></div>
+    </section>
+
+    <section id="sec-insights" class="section">
+      <h2>Key findings</h2>
+      <p class="hint">Written from the numbers calculated in the sections below.</p>
+      <div id="insights"></div>
+    </section>
+
+    <section id="sec-quality" class="section">
+      <h2>Data quality</h2>
+      <p class="hint">Before trusting any chart, check how complete and consistent the data is.</p>
+      <div class="kpis" id="quality-kpis"></div>
+      <div class="chart" id="chart-missing"></div>
+      <h3>Issues found</h3>
+      <div id="quality-issues"></div>
+    </section>
+
+    <section id="sec-columns" class="section">
+      <h2>Column profiles</h2>
+      <p class="hint">The type DataLens detected for each column decides which analyses and charts are used for it.</p>
+      <div id="columns-table"></div>
+    </section>
+
+    <section id="sec-stats" class="section">
+      <h2>Summary statistics</h2>
+      <p class="hint">Descriptive statistics for every numeric column. Skewness above +1 or below −1 means a long tail on one side; kurtosis above 0 means heavier tails than a normal distribution.</p>
+      <div id="stats-table"></div>
+    </section>
+
+    <section id="sec-distributions" class="section">
+      <h2>Distributions</h2>
+      <p class="hint">Histograms show how values are spread. The solid line marks the mean and the dashed line the median.</p>
+      <div class="chart-grid" id="distribution-grid"></div>
+    </section>
+
+    <section id="sec-categories" class="section">
+      <h2>Categories</h2>
+      <p class="hint">Frequency of each value in categorical columns. Pie charts are added only where there are eight or fewer categories.</p>
+      <div id="category-grid"></div>
+    </section>
+
+    <section id="sec-correlation" class="section">
+      <h2>Correlation</h2>
+      <p class="hint">Correlation runs from −1 (move in opposite directions) to +1 (move together). Pearson measures straight-line relationships; Spearman measures any consistently rising or falling relationship. It shows association, not cause and effect.</p>
+      <div class="controls">
+        <div class="segmented" role="group" aria-label="Correlation method">
+          <button type="button" data-method="pearson" class="active">Pearson</button>
+          <button type="button" data-method="spearman">Spearman</button>
+        </div>
+      </div>
+      <div class="chart chart-tall" id="chart-corr"></div>
+      <h3>Strongest pairs</h3>
+      <p class="hint">Select a pair to open it in the scatter plot below.</p>
+      <div id="corr-pairs"></div>
+    </section>
+
+    <section id="sec-multivariate" class="section">
+      <h2>Multivariate analysis</h2>
+
+      <h3>Scatter plot explorer</h3>
+      <p class="hint">Pick two numeric columns. Optionally colour the points by a category to see whether groups behave differently.</p>
+      <div class="controls">
+        <label>X axis <select id="sc-x"></select></label>
+        <label>Y axis <select id="sc-y"></select></label>
+        <label>Colour by <select id="sc-color"></select></label>
+        <button type="button" class="btn btn-primary" id="sc-run">Plot</button>
+      </div>
+      <div class="stat-strip" id="sc-stats"></div>
+      <div class="chart chart-tall" id="chart-scatter"></div>
+
+      <h3>Scatter matrix</h3>
+      <p class="hint">Every pair of the selected columns at once. Choose 2 to 6 columns.</p>
+      <div class="controls">
+        <div class="checks-inline" id="sm-cols"></div>
+        <button type="button" class="btn btn-primary" id="sm-run">Draw matrix</button>
+      </div>
+      <p class="hint" id="sm-note"></p>
+      <div class="chart chart-xl" id="chart-splom"></div>
+
+      <h3>Pivot table</h3>
+      <p class="hint">Summarise a numeric column for each group, or count rows per group.</p>
+      <div class="controls">
+        <label>Rows <select id="pv-rows"></select></label>
+        <label>Columns <select id="pv-cols"></select></label>
+        <label>Values <select id="pv-values"></select></label>
+        <label>Summary <select id="pv-agg">
+          <option value="mean">Average</option><option value="sum">Sum</option><option value="median">Median</option>
+          <option value="min">Minimum</option><option value="max">Maximum</option><option value="count">Count</option>
+        </select></label>
+        <button type="button" class="btn btn-primary" id="pv-run">Build pivot</button>
+      </div>
+      <div id="pv-table"></div>
+      <div class="chart" id="chart-pivot"></div>
+    </section>
+
+    <section id="sec-crosstab" class="section">
+      <h2>Cross-tabulation</h2>
+      <p class="hint">A contingency table counts how often each combination of two categories occurs. The chi-square test checks whether the two columns are independent; Cramér's V (0 to 1) shows how strong the association is.</p>
+      <div class="controls">
+        <label>Rows <select id="ct-a"></select></label>
+        <label>Columns <select id="ct-b"></select></label>
+        <div class="segmented" role="group" aria-label="Show counts or percentages">
+          <button type="button" data-ctmode="counts" class="active">Counts</button>
+          <button type="button" data-ctmode="pct">Row %</button>
+        </div>
+        <button type="button" class="btn btn-primary" id="ct-run">Build table</button>
+      </div>
+      <div class="stat-strip" id="ct-stats"></div>
+      <div id="ct-table"></div>
+      <div class="chart" id="chart-crosstab"></div>
+    </section>
+
+    <section id="sec-timeseries" class="section">
+      <h2>Time series</h2>
+      <div id="ts-empty" class="empty" hidden></div>
+      <div id="ts-body">
+        <p class="hint">Values are grouped into periods (resampled) to show the trend. The moving average smooths short-term ups and downs. Each point is labelled with the first day of its period.</p>
+        <div class="controls">
+          <label>Date column <select id="ts-date"></select></label>
+          <label>Measure <select id="ts-value"></select></label>
+          <label>Summary <select id="ts-agg">
+            <option value="sum">Sum</option><option value="mean">Average</option><option value="median">Median</option>
+            <option value="min">Minimum</option><option value="max">Maximum</option><option value="count">Count</option>
+          </select></label>
+          <label>Period <select id="ts-freq">
+            <option value="auto">Automatic</option><option value="D">Daily</option><option value="W">Weekly</option>
+            <option value="M">Monthly</option><option value="Q">Quarterly</option><option value="Y">Yearly</option>
+          </select></label>
+          <button type="button" class="btn btn-primary" id="ts-run">Update</button>
+        </div>
+        <div class="kpis" id="ts-kpis"></div>
+        <div class="chart chart-tall" id="chart-ts"></div>
+        <div id="ts-anomalies"></div>
+        <h3>Seasonal patterns</h3>
+        <div class="chart-grid" id="ts-seasonal"></div>
+      </div>
+    </section>
+
+    <section id="sec-outliers" class="section">
+      <h2>Outliers</h2>
+      <p class="hint">IQR method: a value is an outlier if it lies more than 1.5 × IQR below the first quartile or above the third quartile. Z-score method: a value is an outlier if it lies more than 3 standard deviations from the mean. Outliers are not always errors; check them before removing anything.</p>
+      <div id="outlier-table"></div>
+      <div class="chart-grid" id="box-grid"></div>
+    </section>
+
+    <section id="sec-compare" class="section">
+      <h2>Compare datasets</h2>
+      <p class="hint">Upload a second file with the same columns, such as next year's data, to compare it with the current one column by column.</p>
+      <div class="controls">
+        <label class="btn" for="compare-input" tabindex="0" id="compare-label">Choose second CSV</label>
+        <input type="file" id="compare-input" accept=".csv,.tsv,.txt,text/csv,text/plain" class="visually-hidden">
+        <span class="hint" id="compare-status"></span>
+      </div>
+      <div id="compare-result"></div>
+    </section>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/vendor/plotly.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
